@@ -3,17 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel Mezcladora ESP32</title>
+    <title>Panel Mezcladora ESP32 - Control Estadístico</title>
+    <!-- Importar Chart.js para los gráficos -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; margin: 0; padding: 20px; }
-        .container { max-width: 400px; margin: 40px auto; background: #1e293b; padding: 25px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
-        h2 { color: #38bdf8; margin-bottom: 20px; }
+        .container { max-width: 600px; margin: 20px auto; background: #1e293b; padding: 25px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+        h2, h3 { color: #38bdf8; margin-bottom: 20px; }
         button { background: #0284c7; color: white; border: none; padding: 12px 20px; font-size: 16px; border-radius: 8px; cursor: pointer; width: 100%; transition: background 0.3s; margin-bottom: 20px; }
         button:hover { background: #0369a1; }
         .card { background: #334155; padding: 15px; border-radius: 10px; margin: 10px 0; font-size: 18px; display: flex; justify-content: space-between; }
         .label { color: #94a3b8; }
         .value { font-weight: bold; color: #facc15; }
         #status { font-size: 14px; margin-bottom: 15px; color: #ef4444; }
+        canvas { background: #ffffff; border-radius: 10px; padding: 10px; margin-top: 20px; }
+        select { width: 100%; padding: 10px; border-radius: 8px; background: #334155; color: white; border: 1px solid #38bdf8; margin-bottom: 20px; font-size: 16px; }
     </style>
 </head>
 <body>
@@ -22,30 +26,87 @@
         <div id="status">Estado: Desconectado</div>
         <button id="connectBtn">Conectar por Bluetooth</button>
         
-        <div class="card">
-            <span class="label">Producto:</span>
-            <span id="prod" class="value">---</span>
-        </div>
-        <div class="card">
-            <span class="label">Tiempo Restante:</span>
-            <span id="time" class="value">---</span>
-        </div>
-        <div class="card">
-            <span class="label">Temperatura:</span>
-            <span id="temp" class="value">---</span>
-        </div>
+        <!-- Panel en Vivo -->
+        <div class="card"><span class="label">Producto:</span><span id="prod" class="value">---</span></div>
+        <div class="card"><span class="label">Tiempo Restante:</span><span id="time" class="value">---</span></div>
+        <div class="card"><span class="label">Temperatura:</span><span id="temp" class="value">---</span></div>
+
+        <!-- Gráfico de Control -->
+        <canvas id="tempChart" width="400" height="250"></canvas>
+
+        <hr style="border: 1px solid #334155; margin: 30px 0;">
+
+        <!-- Historial de Producciones -->
+        <h3>Historial de Producciones</h3>
+        <select id="historialSelect">
+            <option value="">Seleccione una producción anterior...</option>
+        </select>
+        <button id="verHistorialBtn" style="background: #10b981;">Ver Gráfico Seleccionado</button>
     </div>
 
     <script>
         const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
         const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a9";
 
+        // Elementos UI
         const connectBtn = document.getElementById('connectBtn');
         const statusDiv = document.getElementById('status');
         const prodSpan = document.getElementById('prod');
         const timeSpan = document.getElementById('time');
         const tempSpan = document.getElementById('temp');
+        const historialSelect = document.getElementById('historialSelect');
+        const verHistorialBtn = document.getElementById('verHistorialBtn');
 
+        // Variables de datos en vivo
+        let tiempoTranscurrido = 0;
+        let tempsArray = [];
+        let labelsArray = [];
+        let mezclaActiva = false;
+        let productoActual = "";
+        let chartInstance = null;
+
+        // Limites de temperatura por producto (Límite Superior)
+        const limitesTemperatura = {
+            "Jabon": 35.0,
+            "Cloro": 30.0,
+            "Deseng.": 40.0,
+            "Desinf.": 32.0,
+            "Default": 35.0
+        };
+
+        // Inicializar Gráfico
+        function initChart() {
+            const ctx = document.getElementById('tempChart').getContext('2d');
+            if(chartInstance) chartInstance.destroy();
+            
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labelsArray,
+                    datasets: [
+                        {
+                            label: 'Temperatura Real (°C)',
+                            data: tempsArray,
+                            borderColor: '#0284c7',
+                            backgroundColor: 'rgba(2, 132, 199, 0.2)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.3
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'Temperatura °C' }, min: 20, max: 45 },
+                        x: { title: { display: true, text: 'Segundos' } }
+                    }
+                }
+            });
+        }
+        initChart();
+
+        // Lógica de Conexión BLE
         connectBtn.addEventListener('click', async () => {
             try {
                 statusDiv.innerText = "Buscando dispositivo...";
@@ -53,14 +114,8 @@
                     filters: [{ name: 'Mezcladora_ESP32' }],
                     optionalServices: [SERVICE_UUID]
                 });
-
-                statusDiv.innerText = "Conectando al servidor GATT...";
                 const server = await device.gatt.connect();
-                
-                statusDiv.innerText = "Buscando servicio...";
                 const service = await server.getPrimaryService(SERVICE_UUID);
-                
-                statusDiv.innerText = "Buscando característica...";
                 const characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
 
                 await characteristic.startNotifications();
@@ -69,23 +124,127 @@
                 statusDiv.innerText = "Estado: Conectado ✅";
                 statusDiv.style.color = "#4ade80";
                 connectBtn.style.display = "none";
+                cargarSelectHistorial(); // Cargar historial guardado al conectar
 
             } catch (error) {
                 console.log(error);
-                statusDiv.innerText = "Error de conexión o cancelado.";
+                statusDiv.innerText = "Error de conexión.";
             }
         });
 
+        // Recepción de Datos desde ESP32
         function handleNotifications(event) {
-            const value = new TextDecoder().decode(event.target.value);
+            const value = new TextDecoder().decode(event.target.value).trim();
             const partes = value.split(',');
             
             if (partes.length >= 3) {
-                prodSpan.innerText = partes[0];
-                timeSpan.innerText = partes[1] + " s";
-                tempSpan.innerText = partes[2] + " °C";
+                let prod = partes[0];
+                let time = parseInt(partes[1]);
+                let temp = parseFloat(partes[2]);
+
+                prodSpan.innerText = prod;
+                timeSpan.innerText = time + " s";
+                tempSpan.innerText = temp.toFixed(1) + " °C";
+
+                // Detectar inicio de una nueva mezcla
+                if (time > 0 && !mezclaActiva) {
+                    mezclaActiva = true;
+                    productoActual = prod;
+                    tempsArray = [];
+                    labelsArray = [];
+                    tiempoTranscurrido = 0;
+                    
+                    // Agregar línea de Límite de Control Superior Dinámico
+                    let limite = limitesTemperatura[prod] || limitesTemperatura["Default"];
+                    chartInstance.data.datasets[1] = {
+                        label: 'Límite Superior (UCL)',
+                        data: Array(100).fill(limite), // Línea recta
+                        borderColor: '#ef4444',
+                        borderWidth: 2,
+                        borderDash: [5, 5],
+                        fill: false,
+                        pointRadius: 0
+                    };
+                }
+
+                // Guardar datos en vivo en la gráfica
+                if (mezclaActiva && time > 0) {
+                    tiempoTranscurrido++;
+                    labelsArray.push(tiempoTranscurrido);
+                    tempsArray.push(temp);
+                    
+                    // Actualizar gráfica en vivo
+                    chartInstance.data.labels = labelsArray;
+                    chartInstance.data.datasets[0].data = tempsArray;
+                    chartInstance.update();
+                }
+
+                // Detectar fin de la mezcla y guardar historial
+                if (time === 0 && mezclaActiva) {
+                    mezclaActiva = false;
+                    guardarHistorial(productoActual, tempsArray, labelsArray);
+                }
             }
         }
+
+        // Lógica para guardar las últimas 5 producciones
+        function guardarHistorial(producto, temperaturas, tiempos) {
+            let historial = JSON.parse(localStorage.getItem('mezcladoraHistorial')) || [];
+            
+            const nuevaProduccion = {
+                fecha: new Date().toLocaleString(),
+                producto: producto,
+                temps: [...temperaturas],
+                labels: [...tiempos]
+            };
+
+            historial.unshift(nuevaProduccion); // Agregar al inicio
+            if(historial.length > 5) historial.pop(); // Mantener solo los últimos 5
+            
+            localStorage.setItem('mezcladoraHistorial', JSON.stringify(historial));
+            cargarSelectHistorial();
+        }
+
+        // Lógica para cargar menú desplegable
+        function cargarSelectHistorial() {
+            let historial = JSON.parse(localStorage.getItem('mezcladoraHistorial')) || [];
+            historialSelect.innerHTML = '<option value="">Seleccione una producción anterior...</option>';
+            
+            historial.forEach((prod, index) => {
+                let option = document.createElement('option');
+                option.value = index;
+                option.text = `${prod.fecha} - ${prod.producto}`;
+                historialSelect.add(option);
+            });
+        }
+
+        // Mostrar gráfico de una producción pasada
+        verHistorialBtn.addEventListener('click', () => {
+            let index = historialSelect.value;
+            if(index !== "") {
+                let historial = JSON.parse(localStorage.getItem('mezcladoraHistorial')) || [];
+                let datosSeleccionados = historial[index];
+                
+                let limite = limitesTemperatura[datosSeleccionados.producto] || limitesTemperatura["Default"];
+
+                chartInstance.data.labels = datosSeleccionados.labels;
+                chartInstance.data.datasets[0].data = datosSeleccionados.temps;
+                chartInstance.data.datasets[0].label = `Histórico: ${datosSeleccionados.producto}`;
+                
+                chartInstance.data.datasets[1] = {
+                    label: 'Límite Superior (UCL)',
+                    data: Array(datosSeleccionados.labels.length).fill(limite),
+                    borderColor: '#ef4444',
+                    borderWidth: 2,
+                    borderDash: [5, 5],
+                    fill: false,
+                    pointRadius: 0
+                };
+                chartInstance.update();
+            }
+        });
+        
+        cargarSelectHistorial(); // Cargar al iniciar la pág
     </script>
 </body>
 </html>
