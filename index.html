@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel Mezcladora ESP32</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; margin: 0; padding: 20px; }
+        .container { max-width: 400px; margin: 40px auto; background: #1e293b; padding: 25px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+        h2 { color: #38bdf8; margin-bottom: 20px; }
+        button { background: #0284c7; color: white; border: none; padding: 12px 20px; font-size: 16px; border-radius: 8px; cursor: pointer; width: 100%; transition: background 0.3s; margin-bottom: 20px; }
+        button:hover { background: #0369a1; }
+        .card { background: #334155; padding: 15px; border-radius: 10px; margin: 10px 0; font-size: 18px; display: flex; justify-content: space-between; }
+        .label { color: #94a3b8; }
+        .value { font-weight: bold; color: #facc15; }
+        #status { font-size: 14px; margin-bottom: 15px; color: #ef4444; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Mezcladora Industrial</h2>
+        <div id="status">Estado: Desconectado</div>
+        <button id="connectBtn">Conectar por Bluetooth</button>
+        
+        <div class="card">
+            <span class="label">Producto:</span>
+            <span id="prod" class="value">---</span>
+        </div>
+        <div class="card">
+            <span class="label">Tiempo Restante:</span>
+            <span id="time" class="value">---</span>
+        </div>
+        <div class="card">
+            <span class="label">Temperatura:</span>
+            <span id="temp" class="value">---</span>
+        </div>
+    </div>
+
+    <script>
+        const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+        const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a9";
+
+        const connectBtn = document.getElementById('connectBtn');
+        const statusDiv = document.getElementById('status');
+        const prodSpan = document.getElementById('prod');
+        const timeSpan = document.getElementById('time');
+        const tempSpan = document.getElementById('temp');
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                statusDiv.innerText = "Buscando dispositivo...";
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'Mezcladora_ESP32' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                statusDiv.innerText = "Conectando al servidor GATT...";
+                const server = await device.gatt.connect();
+                
+                statusDiv.innerText = "Buscando servicio...";
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                
+                statusDiv.innerText = "Buscando característica...";
+                const characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+                await characteristic.startNotifications();
+                characteristic.addEventListener('characteristicvaluechanged', handleNotifications);
+
+                statusDiv.innerText = "Estado: Conectado ✅";
+                statusDiv.style.color = "#4ade80";
+                connectBtn.style.display = "none";
+
+            } catch (error) {
+                console.log(error);
+                statusDiv.innerText = "Error de conexión o cancelado.";
+            }
+        });
+
+        function handleNotifications(event) {
+            const value = new TextDecoder().decode(event.target.value);
+            const partes = value.split(',');
+            
+            if (partes.length >= 3) {
+                prodSpan.innerText = partes[0];
+                timeSpan.innerText = partes[1] + " s";
+                tempSpan.innerText = partes[2] + " °C";
+            }
+        }
+    </script>
+</body>
+</html>
